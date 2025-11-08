@@ -156,29 +156,39 @@ def start_tiki_crawl(req: TikiCrawlReq):
                     
                     for review in reviews:
                         try:
-                            # Add unique _id to avoid ObjectId issues
-                            review['_id'] = f"tiki_{review.get('review_id', '')}_{int(time.time() * 1000)}"
-                            
-                            print(f"📝 Saving review: {review.get('review_id', 'unknown')}")
-                            
-                            # Save to MongoDB
-                            result = db.reviews_raw.insert_one(review)
-                            print(f"✅ MongoDB insert result: {result.inserted_id}")
+                            rid = str(review.get('review_id', ''))
+                            print(f"📝 Saving review: {rid}")
+
+                            # Upsert into MongoDB by review_id; insert if new, ignore if exists (no duplicate errors)
+                            doc = {k: v for k, v in review.items() if k != '_id'}
+                            upsert_res = db.reviews_raw.update_one(
+                                {"review_id": rid},
+                                {"$setOnInsert": doc},
+                                upsert=True
+                            )
+                            is_new = upsert_res.upserted_id is not None
+                            if is_new:
+                                print(f"✅ Inserted new review with upsert_id: {upsert_res.upserted_id}")
+                            else:
+                                print(f"ℹ️ Review already exists (review_id={rid}), skipping re-insert")
                             
                             # Send to Kafka - data splitting between models (deterministic 50/50)
-                            review_id = str(review.get('review_id', ''))
+                            review_id = rid
                             # Use stable hash (md5) to avoid Python's randomized hash()
                             hmod2 = int(hashlib.md5(review_id.encode('utf-8')).hexdigest(), 16) % 2
                             print(f"🔀 Data Split Debug: review_id={review_id}, md5_mod2={hmod2}")
 
-                            if hmod2 == 0:
-                                # Send to Spark baseline (50% of data)
-                                producer.send('reviews_raw', value=review)
-                                print(f"📊 SPARK: {review_id}")
+                            if is_new:
+                                if hmod2 == 0:
+                                    # Send to Spark baseline (50% of data)
+                                    producer.send('reviews_raw', value=review)
+                                    print(f"📊 SPARK: {review_id}")
+                                else:
+                                    # Send to PhoBERT (50% of data) 
+                                    producer.send('reviews', value=review)
+                                    print(f"🤖 PHOBERT: {review_id}")
                             else:
-                                # Send to PhoBERT (50% of data) 
-                                producer.send('reviews', value=review)
-                                print(f"🤖 PHOBERT: {review_id}")
+                                print(f"⏭️ Skipped Kafka publish for duplicate review_id={review_id}")
                             
                             total_reviews += 1
                             
