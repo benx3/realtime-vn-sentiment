@@ -1,4 +1,5 @@
 import os, json, time
+from datetime import datetime
 from kafka import KafkaConsumer
 import requests
 from pymongo import MongoClient
@@ -95,7 +96,7 @@ while True:
                 "pred_label_vn": label_to_vietnamese(pred) if pred is not None else None,
                 "pred_proba_vec": json.dumps(proba, ensure_ascii=False) if proba is not None else None,
                 "model": "phobert",
-                "ts": int(time.time()),
+                "ts": datetime.now(),
             })
         if docs:
             # Ensure review_id presence, drop any without id to honor unique index

@@ -143,6 +143,14 @@ with live_tab:
     # Process and display reviews data
     if raw:
         df_raw = pd.DataFrame(raw)
+        
+        # Convert datetime columns to string immediately to avoid Arrow serialization errors
+        for col in df_raw.columns:
+            if df_raw[col].dtype == 'object':
+                df_raw[col] = df_raw[col].apply(
+                    lambda v: v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, 'strftime') else (str(v) if pd.notna(v) else "")
+                )
+        
         if "platform" in df_raw.columns:
             display_cols = ["platform", "category_name", "reviewer_name", "product_name", "rating", "content", "create_time"]
             available_cols = [col for col in display_cols if col in df_raw.columns]
@@ -247,6 +255,14 @@ with pred_tab:
         else:
             df_pred['reviewer_name'] = 'Anonymous'
         
+        # Convert datetime columns to string immediately to avoid Arrow serialization errors
+        for col in df_pred.columns:
+            if df_pred[col].dtype == 'object':
+                # Apply conversion to all values in the column
+                df_pred[col] = df_pred[col].apply(
+                    lambda v: v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, 'strftime') else (str(v) if pd.notna(v) else "")
+                )
+        
         # Check if pred_label_vn exists, otherwise fallback
         if "pred_label_vn" in df_pred.columns:
             display_cols = ["platform", "category_name", "reviewer_name", "product_id", "review_id", "pred_label_vn", "content_display", "model", "ts"]
@@ -260,27 +276,7 @@ with pred_tab:
         df_pred_display = df_pred_display.reset_index(drop=True)
         
         # Rename column for better display
-        df_pred_display = df_pred_display.rename(columns={"content_display": "content"})
-        
-        # Add human readable timestamp column
-        def _fmt_ts(v):
-            import datetime
-            try:
-                if isinstance(v,(int,float)):
-                    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(v)))
-                # pymongo returns datetime for Spark current_timestamp()
-                if hasattr(v, 'isoformat'):
-                    return v.strftime("%Y-%m-%d %H:%M:%S")
-                return str(v)
-            except Exception:
-                return str(v)
-        if 'ts' in df_pred_display.columns and 'ts_human' not in df_pred_display.columns:
-            df_pred_display['ts_human'] = df_pred_display['ts'].apply(_fmt_ts)
-            # Put ts_human just before ts
-            cols = list(df_pred_display.columns)
-            if 'ts' in cols:
-                cols.remove('ts_human'); insert_pos = cols.index('ts'); cols.insert(insert_pos, 'ts_human')
-                df_pred_display = df_pred_display[cols]
+        df_pred_display = df_pred_display.rename(columns={"content_display": "content", "ts": "timestamp"})
 
         # Display predictions info and table
         total_pages_pred = max(1, math.ceil(total_predictions / st.session_state.pred_per_page))
@@ -334,8 +330,9 @@ with console_tab:
     
     # Recent prediction activity  
     st.subheader("🔮 Recent Prediction Activity")
+    # Sort by _id (ObjectId insertion order) for true real-time ordering
     recent_predictions = list(db.reviews_pred.find()
-                             .sort([("ts", -1)])
+                             .sort([("_id", -1)])
                              .limit(10))
     
     if recent_predictions:
@@ -345,6 +342,13 @@ with console_tab:
             review_id = pred.get("review_id")
             category_name = pred.get("category_name", "N/A")
             product_id = pred.get("product_id", "N/A")
+            
+            # Convert timestamp to string if it's a datetime object
+            ts_value = pred.get("ts", "N/A")
+            if hasattr(ts_value, 'strftime'):
+                ts_display = ts_value.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                ts_display = str(ts_value) if ts_value else "N/A"
             
             # Try to get product name from raw reviews
             review_detail = db.reviews_raw.find_one({"review_id": review_id}) if review_id else None
@@ -362,7 +366,7 @@ with console_tab:
                 product_display = f"Product {product_id}"
                 
             pred_log_data.append({
-                "Timestamp": pred.get("ts", "N/A"),
+                "Timestamp": ts_display,
                 "Review ID": str(review_id)[:12] + "..." if review_id else "N/A",
                 "Category": category_name,
                 "Product": product_display,

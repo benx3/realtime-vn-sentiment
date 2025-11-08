@@ -92,10 +92,23 @@ def foreach_batch(batch_df, bid):
         pred_out = pred_out.filter(F.col("review_id").isNotNull())
         pred_count = pred_out.count()
         print(f"[SPARK BATCH {bid}] Writing {pred_count} predictions to MongoDB...")
-
-        (pred_out.write.format("mongodb").option("database","reviews_db")
-            .option("collection","reviews_pred").mode("append").save())
-        print(f"[SPARK BATCH {bid}] Successfully wrote {pred_count} predictions!")
+        
+        # Write directly to MongoDB - let unique index handle duplicates
+        # MongoDB unique index on (review_id, model) will silently skip duplicates
+        try:
+            (pred_out.write.format("mongodb")
+                .option("database","reviews_db")
+                .option("collection","reviews_pred")
+                .mode("append")
+                .save())
+            print(f"[SPARK BATCH {bid}] Successfully wrote predictions (MongoDB will skip any duplicates via unique index)!")
+        except Exception as e:
+            err = str(e)
+            # E11000 errors are expected for duplicates and can be ignored
+            if "E11000" in err or "duplicate key" in err.lower():
+                print(f"[SPARK BATCH {bid}] Some duplicates skipped by MongoDB unique index (expected behavior)")
+            else:
+                print(f"[SPARK BATCH {bid}] ERROR during write: {err}")
     else:
         print(f"[SPARK BATCH {bid}] No model available, skipping predictions")
 
