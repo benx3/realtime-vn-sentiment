@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional, List
 from kafka import KafkaProducer
-import json, os, requests
+import json, os, requests, hashlib
 from pymongo import MongoClient
 from crawlers.shopee import ShopeeClient
 from crawlers.tiki import TikiClient
@@ -165,12 +165,13 @@ def start_tiki_crawl(req: TikiCrawlReq):
                             result = db.reviews_raw.insert_one(review)
                             print(f"✅ MongoDB insert result: {result.inserted_id}")
                             
-                            # Send to Kafka - data splitting between models
-                            review_id = review.get('review_id', '')
-                            review_hash = hash(review_id) % 2
-                            print(f"🔀 Data Split Debug: review_id={review_id}, hash={review_hash}")
-                            
-                            if review_hash == 0:
+                            # Send to Kafka - data splitting between models (deterministic 50/50)
+                            review_id = str(review.get('review_id', ''))
+                            # Use stable hash (md5) to avoid Python's randomized hash()
+                            hmod2 = int(hashlib.md5(review_id.encode('utf-8')).hexdigest(), 16) % 2
+                            print(f"🔀 Data Split Debug: review_id={review_id}, md5_mod2={hmod2}")
+
+                            if hmod2 == 0:
                                 # Send to Spark baseline (50% of data)
                                 producer.send('reviews_raw', value=review)
                                 print(f"📊 SPARK: {review_id}")
