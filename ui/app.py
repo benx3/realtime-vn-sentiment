@@ -36,19 +36,6 @@ except Exception as e:
     st.stop()
 
 with st.sidebar:
-    st.subheader("HTML Crawl (Shopee, no API)")
-    shop_links_html = st.text_area("Shop links (one per line)", "")
-    max_products_html = st.number_input("Max products (HTML)", 10, 2000, 100, 10)
-    days_back_html = st.number_input("Days back (HTML)", 1, 3650, 365, 1)
-    c = st.columns(4)
-    if c[0].button("Start HTML Crawl"):
-        payload = {"shop_links": [s.strip() for s in shop_links_html.splitlines() if s.strip()],
-                   "max_products": int(max_products_html), "days_back": int(days_back_html)}
-        r = requests.post(f"{API_BASE}/crawl/html/start", json=payload); st.success(r.json())
-    if c[1].button("Pause"): st.info(requests.post(f"{API_BASE}/crawl/html/pause").json())
-    if c[2].button("Resume"): st.info(requests.post(f"{API_BASE}/crawl/html/resume").json())
-    if c[3].button("Stop"): st.warning(requests.post(f"{API_BASE}/crawl/html/stop").json())
-
     st.subheader("Tiki Crawler")
     st.write("Support URLs:")
     st.write("• Brand: `tiki.vn/thuong-hieu/brand-name.html`")
