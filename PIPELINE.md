@@ -5,12 +5,12 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                         UI (Streamlit)                          │
 │  - Crawl Control  - Live Reviews  - Live Predictions           │
-│  - Console Logs   - Evaluation   - Auto-refresh (5s)           │
+│  - Console Logs   - Evaluation   - Auto-refresh (3s)           │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                       API (FastAPI)                             │
-│  - Crawler endpoints (Shopee HTML, Tiki API)                   │
+│  - Crawler endpoints (Tiki API only)                           │
 │  - Data Splitting Logic: hash(review_id) % 2                   │
 └─────────────────────────────────────────────────────────────────┘
                 ↓                              ↓
@@ -41,20 +41,9 @@
 
 ## Components
 
-### 1. Crawlers
+### 1. Tiki API Crawler
 
-#### Shopee HTML Crawler (Playwright)
-- **Technology**: Headless Chromium with Playwright
-- **Method**: DOM scraping + JSON interception
-- **Features**:
-  - Pause/Resume/Stop controls
-  - Proxy pool support
-  - Rate limiting
-  - Retry with backoff
-  - Logs to MongoDB
-- **Output**: `reviews_raw` collection
-
-#### Tiki API Crawler
+#### Technology & Features
 - **Technology**: Direct API calls with X-Guest-Token
 - **Endpoints**:
   - Products by category: `/api/v2/products?category={id}`
@@ -66,7 +55,8 @@
   - Real category names from API
   - Reviewer names from `created_by` field
   - Product URLs: `https://tiki.vn/product-p{id}.html`
-  - Pagination support (20 reviews per page)
+  - Pagination support (20 reviews per page, up to 500 per product)
+  - Start/Stop controls from UI
 - **Output**: `reviews_raw` collection with enhanced metadata
 
 ### 2. Data Splitting (API Layer)
@@ -91,8 +81,11 @@ else:
   3. TF-IDF vectorization
   4. Logistic Regression (incremental fit per micro-batch)
 - **Output**: `reviews_pred` with `model="spark-baseline"`
-- **Schema**: Includes `category_name` field
-- **Features**: Real-time streaming with checkpointing
+- **Schema**: Includes `review_id`, `category_name`, `pred_proba_vec` fields
+- **Features**: 
+  - Real-time streaming with checkpointing at `/tmp/chk_sentiment`
+  - Detailed logging for batch processing
+  - Vietnamese label mapping
 
 #### PhoBERT Pipeline
 - **PhoBERT Consumer** (`phobert-consumer`):
@@ -135,6 +128,7 @@ else:
 ```javascript
 {
   _id: ObjectId("..."),
+  review_id: "20185286",         // Added for exact queries
   platform: "tiki",
   product_id: "278069931",
   category_id: "8594",
@@ -155,23 +149,46 @@ else:
 - Displays: platform, category_name, reviewer_name, product_name, rating, content
 - Sorted by: `crawled_at` (descending)
 - Pagination: 20 rows per page
-- Auto-refresh: 5 seconds
+- Auto-refresh: 3 seconds
 
 #### Live Predictions Tab
 - Displays: platform, category_name, reviewer_name, product_id, pred_label_vn, content, model
-- Shows predictions from BOTH models
-- Timestamp column for tracking
-- Auto-refresh: 5 seconds
+- Shows predictions from BOTH models (spark-baseline and phobert)
+- Sorted by: `_id` (ObjectId, descending) for reliable newest-first ordering
+- Timestamp column (`ts_human`) for tracking
+- "Last refresh" indicator showing update time
+- Auto-refresh: 3 seconds
 
 #### Console Logs Tab
-- Prediction activity log
+- **Recent Crawler Activity**: Last 20 crawled reviews
+- **Recent Predictions**: Last 20 predictions with details
 - Shows: Timestamp, Review ID, Category, Product, Prediction, Model
-- Helps monitor model activity
+- Helps monitor system activity in real-time
+- Auto-refresh: 3 seconds
 
 #### Evaluation Tab
-- Batch inference testing
-- Distribution charts by product and category
-- Sample data view
+- **Manual Evaluation**: Batch inference testing
+  - Sample size: 100-5000 reviews (adjustable)
+  - Random sampling from `reviews_raw` collection
+  - Persistent results across auto-refreshes
+- **Top 10 Products by Reviews**: Horizontal bar chart
+  - Shows review count distribution
+  - Color-coded by sentiment (Tốt/Trung bình/Không tốt)
+  - Sorted by total review count
+- **By Category**: Vertical bar chart
+  - Sentiment distribution across product categories
+  - Color mapping: Green (#2ecc71), Yellow (#f39c12), Red (#e74c3c)
+- **Top 10 Worst Products**: Horizontal bar chart
+  - Products with most "Không tốt" reviews
+  - Gradient red color scale for visual impact
+- **Review Details**: Interactive product review viewer
+  - **Search modes**:
+    - Product Name: Dropdown selector with full product names
+    - Product ID: Text search (exact or partial match)
+  - **Summary metrics**: Total reviews, sentiment percentages (4 columns)
+  - **Tabbed reviews**: ✅ Tốt, ⚠️ Trung bình, ❌ Không tốt
+  - **Expandable details**: Rating, reviewer name, title, content, metadata
+  - Uses `review_id` for exact MongoDB queries (no regex errors)
 
 ## Data Model
 
@@ -206,13 +223,14 @@ else:
 4. **Access UI** at `http://127.0.0.1:8501`
 
 5. **Start crawling**:
-   - **Shopee**: Paste shop URL → Click "Start HTML Crawl"
    - **Tiki**: Choose crawl type (brand/store/category) → Enter URL → Start
+   - Configure: Max products, reviews per product (up to 500), days back
 
 6. **Monitor**:
    - Live Reviews: See incoming reviews with realtime updates
    - Live Predictions: See both Spark and PhoBERT predictions
-   - Console Logs: Track model activity
+   - Console Logs: Track crawler and prediction activity
+   - Evaluation: Generate samples and view analytics charts
 
 ## Key Features
 
@@ -223,12 +241,25 @@ else:
 - **Scalability**: Can adjust split ratio by modifying hash logic
 
 ### Realtime Processing
-- **UI Auto-refresh**: 5-second intervals
+- **UI Auto-refresh**: 3-second intervals
 - **Kafka Streaming**: Sub-second message delivery
 - **Spark Micro-batching**: Configurable batch intervals
-- **PhoBERT Batching**: Optimized for GPU throughput
+- **PhoBERT Batching**: Optimized for GPU throughput (batch_size=128)
 
 ## Troubleshooting
+
+### Spark Not Processing Existing Data
+If Spark checkpoint prevents reading existing Kafka messages:
+```bash
+# Clear checkpoint directory
+docker exec realtime-vn-sentiment-spark-job-1 rm -rf /tmp/chk_sentiment
+
+# Restart Spark
+docker restart realtime-vn-sentiment-spark-job-1
+
+# Verify processing in logs
+docker logs realtime-vn-sentiment-spark-job-1 --tail 50 | grep "SPARK BATCH"
+```
 
 ### No Predictions Appearing
 1. Check consumer offsets:
@@ -258,9 +289,14 @@ else:
 
 ### Missing category_name
 - Ensure schema includes `category_name`:
-  - Spark: Check `StructType` definition
+  - Spark: Check `StructType` definition in `main_streaming.py`
   - PhoBERT consumer: Check buffer append logic
-  - Tiki crawler: Verify API fetch
+  - Tiki crawler: Verify category API fetch
+
+### Review Details Display Issues
+- **MongoDB regex errors**: Fixed by using `review_id` for exact queries
+- **Product not showing reviews**: Ensure dataframe has `review_id`, `product_id`, `product_name_full`
+- **Search not working**: Check if Product ID search mode is selected correctly
 
 ## Extending the System
 

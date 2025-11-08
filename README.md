@@ -4,19 +4,19 @@ This project streams e-commerce reviews (Shopee, Tiki) in **realtime**, performs
 - **Spark Baseline** (TF-IDF + Logistic Regression) - processes 50% of reviews
 - **PhoBERT** (transformer-based) - processes the other 50% of reviews
 
-Reviews are stored in **MongoDB**, predictions visualized in **Streamlit UI** with realtime auto-refresh every 5 seconds.
+Reviews are stored in **MongoDB**, predictions visualized in **Streamlit UI** with realtime auto-refresh every 3 seconds.
 
 ## Architecture Overview
 
 ### Data Flow
 ```
-Crawler (Shopee/Tiki) → API → Kafka Topics (reviews/reviews_raw)
-                                    ↓                    ↓
-                            PhoBERT Consumer      Spark Streaming
-                                    ↓                    ↓
-                                MongoDB (reviews_pred collection)
-                                              ↓
-                                    Streamlit UI (realtime dashboard)
+Tiki Crawler → API → Kafka Topics (reviews/reviews_raw)
+                            ↓                    ↓
+                    PhoBERT Consumer      Spark Streaming
+                            ↓                    ↓
+                        MongoDB (reviews_pred collection)
+                                      ↓
+                            Streamlit UI (realtime dashboard)
 ```
 
 ### Data Splitting Logic
@@ -40,31 +40,42 @@ docker exec -it mongo mongosh --eval "rs.status()"
 
 ## Features
 
-### Crawlers
-1. **Shopee HTML Crawler** (Playwright-based, no API required)
-   - Shop URLs: `https://shopee.vn/olay_officialstorevn#product_list`
-   - Features: pause/resume, proxy pool, rate limiting
-
-2. **Tiki API Crawler** (official API with token)
-   - **Brand URLs**: `https://tiki.vn/thuong-hieu/nan.html`
-   - **Store URLs**: `https://tiki.vn/cua-hang/mrm-manlywear-official`
-   - **Category URLs**: `https://tiki.vn/thiet-bi-kts-phu-kien-so/c1815`
-   - Fetches real category names via API
-   - Extracts reviewer names from `created_by` field
-   - Includes product URLs in all reviews
+### Tiki API Crawler
+- **Brand URLs**: `https://tiki.vn/thuong-hieu/nan.html`
+- **Store URLs**: `https://tiki.vn/cua-hang/mrm-manlywear-official`
+- **Category URLs**: `https://tiki.vn/thiet-bi-kts-phu-kien-so/c1815`
+- Fetches real category names via API
+- Extracts reviewer names from `created_by` field
+- Includes product URLs in all reviews
+- Supports up to 500 reviews per product
 
 ### UI Dashboard (Streamlit)
-- **Live Reviews** - Realtime view of crawled reviews with category names, reviewer names, product URLs
+- **Live Reviews** - Realtime view of crawled reviews with pagination
+  - Platform, category, reviewer name, rating, content
+  - Sorted by crawled time (newest first)
 - **Live Predictions** - Predictions from both Spark and PhoBERT models
-- **Console Logs** - Prediction activity log
-- **Evaluation** - Batch inference testing
-- **Auto-refresh**: Every 5 seconds
+  - Shows sentiment predictions with Vietnamese labels
+  - Displays model source (spark-baseline or phobert)
+  - Timestamp tracking for real-time updates
+- **Console Logs** - System activity monitoring
+  - Recent crawler activity
+  - Prediction logs with review details
+- **Evaluation** - Batch inference and analytics
+  - Random sample generation (100-5000 reviews)
+  - **Top 10 Products by Reviews** - Horizontal bar chart with sentiment breakdown
+  - **By Category** - Distribution across product categories
+  - **Top 10 Worst Products** - Products with most negative reviews
+  - **Review Details** - Search and view reviews by:
+    - Product Name (dropdown selector)
+    - Product ID (text search)
+  - Summary metrics: Total reviews, sentiment percentages
+  - Tabbed review display: Tốt / Trung bình / Không tốt
+- **Auto-refresh**: Every 3 seconds
 
 ### Services
 - `mongo` (MongoDB + replicaset for Spark connector)
 - `zookeeper`, `kafka` (message broker with 2 topics: `reviews`, `reviews_raw`)
 - `api` (FastAPI) — crawler control endpoints + data splitting logic
-- `crawler-html` (Playwright) — Shopee HTML crawler
 - `spark-job` — Spark Structured Streaming baseline model
 - `phobert-infer` — PhoBERT inference microservice (CUDA-enabled)
 - `phobert-consumer` — Kafka consumer for PhoBERT predictions
@@ -72,10 +83,15 @@ docker exec -it mongo mongosh --eval "rs.status()"
 
 ### MongoDB Collections
 - **reviews_raw** - Raw crawled reviews with metadata (platform, category_name, reviewer_name, product_url)
+  - Fields: `_id`, `platform`, `review_id`, `product_id`, `product_name`, `product_url`
+  - `category_id`, `category_name`, `rating`, `title`, `content`
+  - `reviewer_name`, `create_time`, `crawled_at`, `source_type`, `source_id`
 - **reviews_pred** - Model predictions with fields:
-  - `platform`, `product_id`, `category_id`, `category_name`
+  - `review_id`, `platform`, `product_id`, `category_id`, `category_name`
+  - `rating`, `text` (title + content)
   - `pred_label` (0=Không tốt, 1=Tốt, 2=Trung bình)
   - `pred_label_vn` (Vietnamese label)
+  - `pred_proba_vec` (probability distribution as JSON string)
   - `model` (`spark-baseline` or `phobert`)
   - `ts` (timestamp)
 
@@ -106,10 +122,24 @@ docker exec -it mongo mongosh --eval "rs.status()"
 - If build fails fetching model (no internet), remove the build-time download and place the model folder under `phobert-infer/models/phobert-sentiment-best/` manually, then rebuild.
 - If GPU not visible, check: `docker run --gpus all --rm nvidia/cuda:12.1.1-runtime-ubuntu22.04 nvidia-smi`.
 
--xóa data test
+### Clear Test Data
+```bash
+# Delete all data
 docker exec mongo mongosh reviews_db --quiet --eval "db.reviews_raw.deleteMany({}); db.reviews_pred.deleteMany({}); print('Data cleared successfully');"
--kiem tra lại đã xóa hết chưa 
+
+# Verify deletion
 docker exec mongo mongosh reviews_db --quiet --eval "print('reviews_raw count:', db.reviews_raw.countDocuments({})); print('reviews_pred count:', db.reviews_pred.countDocuments({}));"
 
-- restart lại service để chạy từ lúc này.
+# Restart services to process from current point
 docker-compose restart spark-job phobert-consumer
+```
+
+### Spark Checkpoint Reset
+If Spark is not processing existing Kafka data:
+```bash
+# Clear checkpoint
+docker exec realtime-vn-sentiment-spark-job-1 rm -rf /tmp/chk_sentiment
+
+# Restart Spark
+docker restart realtime-vn-sentiment-spark-job-1
+```
