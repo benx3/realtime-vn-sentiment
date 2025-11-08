@@ -4,39 +4,40 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         UI (Streamlit)                          │
-│  - Crawl Control  - Live Reviews  - Live Predictions           │
-│  - Console Logs   - Evaluation   - Auto-refresh (3s)           │
+│  - Crawl Control  - Live Reviews  - Live Predictions            │
+│  - Console Logs   - Evaluation   - Auto-refresh (3s)            │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                       API (FastAPI)                             │
-│  - Crawler endpoints (Tiki API only)                           │
-│  - Data Splitting Logic: hash(review_id) % 2                   │
+│  - Crawler endpoints (Tiki API only)                            │
+│  - Data Splitting Logic: hash(review_id) % 2                    │
 └─────────────────────────────────────────────────────────────────┘
-                ↓                              ↓
-    ┌──────────────────┐          ┌──────────────────┐
+            ↓                              ↓
+    ┌──────────────────┐          ┌───────────────────┐
     │ Kafka: reviews   │          │ Kafka: reviews_raw│
     │   (hash = 1)     │          │    (hash = 0)     │
-    └──────────────────┘          └──────────────────┘
-            ↓                              ↓
+    └──────────────────┘          └───────────────────┘
+            ↓                               ↓
 ┌─────────────────────┐        ┌─────────────────────┐
 │ PhoBERT Consumer    │        │  Spark Streaming    │
 │ - Batch reviews     │        │  - TF-IDF + LR      │
 │ - Call inference    │        │  - Weak labeling    │
-│ - Save predictions  │        │  - Incremental fit  │
+│ - Save predictions  │        │  - Incremental fit  │  
 └─────────────────────┘        └─────────────────────┘
-            ↓                              ↓
-    ┌────────────────────────────────────────────┐
-    │   PhoBERT Inference Service (CUDA)        │
-    │   - wonrax/phobert-base-vietnamese        │
-    │   - GPU-accelerated inference             │
-    └────────────────────────────────────────────┘
-                        ↓
-    ┌────────────────────────────────────────────┐
-    │         MongoDB (reviews_db)               │
-    │  - reviews_raw (crawler output)            │
-    │  - reviews_pred (model predictions)        │
-    └────────────────────────────────────────────┘
+            ↓                                   |
+                                                |
+  ┌────────────────────────────────────┐        |
+  │   PhoBERT Inference Service (CUDA) │        |
+  │   - wonrax/phobert-base-vietnamese │        |
+  │   - GPU-accelerated inference      |        |  
+  └────────────────────────────────────┘        |
+                        ↓                       ↓
+              ┌────────────────────────────────────────────┐
+              │         MongoDB (reviews_db)               │
+              │  - reviews_raw (crawler output)            │
+              │  - reviews_pred (model predictions)        │
+              └────────────────────────────────────────────┘
 ```
 
 ## Components
