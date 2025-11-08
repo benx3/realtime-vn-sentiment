@@ -27,15 +27,15 @@ Tiki Crawler → API → Kafka Topics (reviews/reviews_raw)
 - Each review processed by exactly ONE model
 
 ## Quick Start
-```bash
-git clone <this-repo>
+```powershell
+git clone https://github.com/benx3/realtime-vn-sentiment.git
 cd realtime-vn-sentiment
-docker compose up -d --build
+docker-compose up -d --build
 
-# initialize mongo replicaset (automatic on first run)
-docker exec -it mongo mongosh --eval "rs.status()"
+# Verify mongo replicaset (automatic on first run)
+docker exec mongo mongosh --eval "rs.status()"
 
-# open UI at http://127.0.0.1:8501
+# Open UI at http://127.0.0.1:8501
 ```
 
 ## Features
@@ -123,7 +123,7 @@ docker exec -it mongo mongosh --eval "rs.status()"
 - If GPU not visible, check: `docker run --gpus all --rm nvidia/cuda:12.1.1-runtime-ubuntu22.04 nvidia-smi`.
 
 ### Clear Test Data
-```bash
+```powershell
 # Delete all data
 docker exec mongo mongosh reviews_db --quiet --eval "db.reviews_raw.deleteMany({}); db.reviews_pred.deleteMany({}); print('Data cleared successfully');"
 
@@ -136,10 +136,13 @@ docker-compose restart spark-job phobert-consumer
 
 ### Spark Checkpoint Reset
 If Spark is not processing existing Kafka data:
-```bash
+```powershell
 # Clear checkpoint
 docker exec realtime-vn-sentiment-spark-job-1 rm -rf /tmp/chk_sentiment
 
 # Restart Spark
 docker restart realtime-vn-sentiment-spark-job-1
+
+# Verify processing
+docker logs realtime-vn-sentiment-spark-job-1 --tail 50 | Select-String -Pattern "SPARK BATCH"
 ```

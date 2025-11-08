@@ -204,17 +204,17 @@ else:
 ## Running Step-by-Step
 
 1. **Start services**:
-   ```bash
-   docker compose up -d --build
+   ```powershell
+   docker-compose up -d --build
    ```
 
 2. **Verify MongoDB replicaset**:
-   ```bash
-   docker exec -it mongo mongosh --eval "rs.status()"
+   ```powershell
+   docker exec mongo mongosh --eval "rs.status()"
    ```
 
 3. **Check service status**:
-   ```bash
+   ```powershell
    docker ps
    docker logs phobert-consumer --tail 20
    docker logs realtime-vn-sentiment-spark-job-1 --tail 20
@@ -250,7 +250,7 @@ else:
 
 ### Spark Not Processing Existing Data
 If Spark checkpoint prevents reading existing Kafka messages:
-```bash
+```powershell
 # Clear checkpoint directory
 docker exec realtime-vn-sentiment-spark-job-1 rm -rf /tmp/chk_sentiment
 
@@ -258,34 +258,37 @@ docker exec realtime-vn-sentiment-spark-job-1 rm -rf /tmp/chk_sentiment
 docker restart realtime-vn-sentiment-spark-job-1
 
 # Verify processing in logs
-docker logs realtime-vn-sentiment-spark-job-1 --tail 50 | grep "SPARK BATCH"
+docker logs realtime-vn-sentiment-spark-job-1 --tail 50 | Select-String -Pattern "SPARK BATCH"
 ```
 
 ### No Predictions Appearing
 1. Check consumer offsets:
-   ```bash
-   docker exec realtime-vn-sentiment-kafka-1 kafka-consumer-groups \
-     --bootstrap-server localhost:9092 --describe --group phobert-consumer-group
+   ```powershell
+   docker exec realtime-vn-sentiment-kafka-1 kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group phobert-consumer-group
    ```
 
 2. Check Spark logs:
-   ```bash
+   ```powershell
    docker logs realtime-vn-sentiment-spark-job-1 --tail 50
    ```
 
 3. Verify data splitting:
-   ```bash
-   docker logs api --tail 30 | grep "SPARK\|PHOBERT"
+   ```powershell
+   docker logs api --tail 30 | Select-String -Pattern "SPARK|PHOBERT"
    ```
 
 ### Duplicate Predictions
-- Reset consumer offsets:
-  ```bash
-  docker-compose stop phobert-consumer spark-job
-  docker exec realtime-vn-sentiment-kafka-1 kafka-consumer-groups \
-    --bootstrap-server localhost:9092 --group phobert-consumer-group \
-    --reset-offsets --to-latest --topic reviews --execute
-  ```
+Reset consumer offsets:
+```powershell
+# Stop services
+docker-compose stop phobert-consumer spark-job
+
+# Reset offsets
+docker exec realtime-vn-sentiment-kafka-1 kafka-consumer-groups --bootstrap-server localhost:9092 --group phobert-consumer-group --reset-offsets --to-latest --topic reviews --execute
+
+# Restart services
+docker-compose start phobert-consumer spark-job
+```
 
 ### Missing category_name
 - Ensure schema includes `category_name`:
