@@ -152,7 +152,7 @@ with live_tab:
                 )
         
         if "platform" in df_raw.columns:
-            display_cols = ["platform", "category_name", "reviewer_name", "product_name", "rating", "content", "create_time"]
+            display_cols = ["platform", "category_name", "reviewer_name", "product_name", "content", "create_time"]
             available_cols = [col for col in display_cols if col in df_raw.columns]
             
             # Select columns first to maintain order from MongoDB
@@ -216,6 +216,8 @@ with pred_tab:
             content_col = "text"
         elif "content" in df_pred.columns:
             content_col = "content"
+        elif "product_name" in df_pred.columns:
+            content_col = "product_name"  # Fallback to product name
         
         # Truncate long text for display
         if content_col:
@@ -263,9 +265,27 @@ with pred_tab:
                     lambda v: v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, 'strftime') else (str(v) if pd.notna(v) else "")
                 )
         
+        # Map sentiment labels to Vietnamese
+        if "sentiment_label" in df_pred.columns:
+            def translate_sentiment(label):
+                translations = {
+                    'positive': 'Tích cực',
+                    'negative': 'Tiêu cực', 
+                    'neutral': 'Trung tính'
+                }
+                return translations.get(str(label).lower(), str(label))
+            
+            df_pred['pred_label_vn'] = df_pred['sentiment_label'].apply(translate_sentiment)
+        
+        # Use timestamp if ts doesn't exist
+        if "timestamp" in df_pred.columns and "ts" not in df_pred.columns:
+            df_pred['ts'] = df_pred['timestamp']
+        
         # Check if pred_label_vn exists, otherwise fallback
         if "pred_label_vn" in df_pred.columns:
             display_cols = ["platform", "category_name", "reviewer_name", "product_id", "review_id", "pred_label_vn", "content_display", "model", "ts"]
+        elif "sentiment_label" in df_pred.columns:
+            display_cols = ["platform", "category_name", "reviewer_name", "product_id", "review_id", "sentiment_label", "content_display", "model", "ts"]
         else:
             display_cols = ["platform", "category_name", "reviewer_name", "product_id", "review_id", "pred_label", "content_display", "model", "ts"]
         
@@ -389,13 +409,25 @@ with eval_tab:
         st.session_state.eval_last_info = None
     
     # Sampling controls
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        k = st.number_input("Sample size", 100, 5000, 1000, 100, help="Number of reviews to sample randomly")
+        k = st.number_input("Sample size", 100, 2000, 500, 100, help="Number of reviews to sample randomly (max 2000 for performance)")
     with col2:
         st.write("")  # Spacer
         st.write("")  # Spacer
         generate_click = st.button("🎲 Generate Sample", type="primary", use_container_width=True)
+    with col3:
+        st.write("")  # Spacer
+        st.write("")  # Spacer
+        if st.button("🗑️ Clear Results", type="secondary", use_container_width=True):
+            st.session_state.eval_last_df = None
+            st.session_state.eval_last_error = None
+            st.session_state.eval_last_info = "Results cleared. Auto-refresh resumed."
+            st.rerun()
+    
+    # Performance warning
+    if k > 1000:
+        st.warning(f"⚠️ Large sample size ({k}) may take longer to process. Consider using smaller samples for faster results.")
     
     if generate_click:
         try:
@@ -417,55 +449,100 @@ with eval_tab:
             else:
                 rows_filtered, texts_filtered = zip(*valid_data)
                 try:
-                    resp = requests.post(f"{INFER_URL}/predict", json={"texts": list(texts_filtered)}, timeout=60)
-                    if resp.status_code != 200:
-                        st.session_state.eval_last_error = f"Inference HTTP {resp.status_code}: {resp.text[:200]}"
+                    # Process in smaller batches to avoid timeout
+                    batch_size = 100
+                    all_preds = []
+                    texts_list = list(texts_filtered)
+                    
+                    # Show progress bar
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    success = True
+                    total_batches = (len(texts_list) + batch_size - 1) // batch_size
+                    
+                    for i in range(0, len(texts_list), batch_size):
+                        batch_texts = texts_list[i:i + batch_size]
+                        current_batch = i // batch_size + 1
+                        progress = (current_batch) / total_batches
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processing batch {current_batch}/{total_batches} ({len(batch_texts)} texts)...")
+                        
+                        try:
+                            resp = requests.post(f"{INFER_URL}/predict", json={"texts": batch_texts}, timeout=120)
+                            if resp.status_code != 200:
+                                st.session_state.eval_last_error = f"Inference HTTP {resp.status_code}: {resp.text[:200]}"
+                                success = False
+                                break
+                            else:
+                                res = resp.json()
+                                batch_preds = res.get("pred")
+                                if batch_preds:
+                                    all_preds.extend(batch_preds)
+                                else:
+                                    st.session_state.eval_last_error = f"Batch {current_batch} returned no predictions"
+                                    success = False
+                                    break
+                        except Exception as e:
+                            st.session_state.eval_last_error = f"Error in batch {current_batch}: {str(e)}"
+                            success = False
+                            break
+                    
+                    # Clear progress indicators
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                    if not success:
                         st.error(st.session_state.eval_last_error)
+                        st.session_state.eval_last_df = None  # Clear previous results
+                    elif not all_preds:
+                        st.session_state.eval_last_error = "No predictions received from inference service."
+                        st.error(st.session_state.eval_last_error)
+                        st.session_state.eval_last_df = None  # Clear previous results
+                    elif len(all_preds) != len(texts_list):
+                        st.session_state.eval_last_error = f"Mismatch: Expected {len(texts_list)} predictions, got {len(all_preds)}"
+                        st.error(st.session_state.eval_last_error)
+                        st.session_state.eval_last_df = None  # Clear previous results
                     else:
-                        res = resp.json()
-                        preds = res.get("pred")
-                        if not preds:
-                            st.session_state.eval_last_error = "Inference service returned no predictions."
-                            st.error(st.session_state.eval_last_error)
-                        else:
-                            min_len = min(len(rows_filtered), len(preds))
-                            def label_to_vietnamese(pred_label):
-                                label_map = {0: "Không tốt", 1: "Tốt", 2: "Trung bình"}
-                                return label_map.get(pred_label, f"Unknown({pred_label})")
+                        preds = all_preds
+                        min_len = min(len(rows_filtered), len(preds))
+                        def label_to_vietnamese(pred_label):
+                            label_map = {0: "Không tốt", 1: "Tốt", 2: "Trung bình"}
+                            return label_map.get(pred_label, f"Unknown({pred_label})")
+                        
+                        # Build dataframe with all necessary fields
+                        product_names = []
+                        product_names_full = []
+                        product_ids = []
+                        review_ids = []
+                        
+                        for r in rows_filtered[:min_len]:
+                            # Store full product name
+                            full_name = r.get("product_name", r.get("product_id", "Unknown"))
+                            product_names_full.append(full_name)
                             
-                            # Build dataframe with all necessary fields
-                            product_names = []
-                            product_names_full = []
-                            product_ids = []
-                            review_ids = []
+                            # Create display name (truncated)
+                            pname = full_name
+                            if pname and len(pname) > 40:
+                                pname = pname[:40] + "..."
+                            product_names.append(pname)
                             
-                            for r in rows_filtered[:min_len]:
-                                # Store full product name
-                                full_name = r.get("product_name", r.get("product_id", "Unknown"))
-                                product_names_full.append(full_name)
-                                
-                                # Create display name (truncated)
-                                pname = full_name
-                                if pname and len(pname) > 40:
-                                    pname = pname[:40] + "..."
-                                product_names.append(pname)
-                                
-                                # Store product_id and review_id for queries
-                                product_ids.append(r.get("product_id", ""))
-                                review_ids.append(r.get("review_id", ""))
-                            
-                            df = pd.DataFrame({
-                                "review_id": review_ids,
-                                "product_id": product_ids,
-                                "product_name": product_names,
-                                "product_name_full": product_names_full,
-                                "category_name": [r.get("category_name", "Unknown") for r in rows_filtered[:min_len]],
-                                "pred_label": [label_to_vietnamese(p) for p in preds[:min_len]],
-                                "pred_numeric": preds[:min_len]
-                            })
-                            st.session_state.eval_last_df = df
-                            st.session_state.eval_last_error = None
-                            st.session_state.eval_last_info = f"Sampled {min_len} reviews."
+                            # Store product_id and review_id for queries
+                            product_ids.append(r.get("product_id", ""))
+                            review_ids.append(r.get("review_id", ""))
+                        
+                        df = pd.DataFrame({
+                            "review_id": review_ids,
+                            "product_id": product_ids,
+                            "product_name": product_names,
+                            "product_name_full": product_names_full,
+                            "category_name": [r.get("category_name", "Unknown") for r in rows_filtered[:min_len]],
+                            "pred_label": [label_to_vietnamese(p) for p in preds[:min_len]],
+                            "pred_numeric": preds[:min_len]
+                        })
+                        st.session_state.eval_last_df = df
+                        st.session_state.eval_last_error = None
+                        st.session_state.eval_last_info = f"Sampled {min_len} reviews successfully processed."
                 except Exception as e:
                     st.session_state.eval_last_error = f"Error calling inference service: {e}"
                     st.error(st.session_state.eval_last_error)
@@ -488,15 +565,24 @@ with eval_tab:
                                    labels={"pred_label": "Đánh giá", "count": "Số lượng"},
                                    color_discrete_map={"Tốt": "#2ecc71", "Trung bình": "#f39c12", "Không tốt": "#e74c3c"},
                                    category_orders={"pred_label": ["Tốt", "Trung bình", "Không tốt"]})
-            fig_prod.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig_prod, use_container_width=True)
+            fig_prod.update_layout(
+                yaxis={'categoryorder':'total ascending'},
+                height=400,
+                margin=dict(l=20, r=20, t=20, b=20)
+            )
+            st.plotly_chart(fig_prod, use_container_width=True, config={'displayModeBar': False})
         with c2:
             st.subheader("By category")
             fig_cat = px.histogram(df, x="category_name", color="pred_label",
                                   labels={"pred_label": "Đánh giá", "count": "Số lượng"},
                                   color_discrete_map={"Tốt": "#2ecc71", "Trung bình": "#f39c12", "Không tốt": "#e74c3c"},
                                   category_orders={"pred_label": ["Tốt", "Trung bình", "Không tốt"]})
-            st.plotly_chart(fig_cat, use_container_width=True)
+            fig_cat.update_layout(
+                height=400,
+                margin=dict(l=20, r=20, t=20, b=20),
+                xaxis_tickangle=-45
+            )
+            st.plotly_chart(fig_cat, use_container_width=True, config={'displayModeBar': False})
         
         # Top 10 Worst Products (most negative reviews)
         st.divider()
@@ -519,8 +605,13 @@ with eval_tab:
                              labels={'negative_count': 'Số đánh giá tiêu cực', 'product_name': 'Sản phẩm'},
                              color='negative_count',
                              color_continuous_scale=['#ffcccc', '#ff0000'])
-            fig_worst.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False)
-            st.plotly_chart(fig_worst, use_container_width=True)
+            fig_worst.update_layout(
+                yaxis={'categoryorder':'total ascending'}, 
+                showlegend=False,
+                height=400,
+                margin=dict(l=20, r=20, t=20, b=20)
+            )
+            st.plotly_chart(fig_worst, use_container_width=True, config={'displayModeBar': False})
             
             # Product selector for detailed reviews
             st.divider()
@@ -646,17 +737,14 @@ with eval_tab:
                         st.info("No negative reviews found")
         else:
             st.warning("No negative reviews found in the sample")
-        
-        st.divider()
-        st.subheader("📊 Sample Data Table")
-        st.dataframe(df[["product_name", "category_name", "pred_label"]].head(50), use_container_width=True)
     elif st.session_state.eval_last_error:
         st.error(st.session_state.eval_last_error)
     elif st.session_state.eval_last_info:
         st.warning(st.session_state.eval_last_info)
 
-# Auto-refresh functionality
-if auto_refresh:
+# Auto-refresh functionality - Skip when user is working with evaluation results
+# Check if user has active evaluation results to prevent interrupting their analysis
+if auto_refresh and not (st.session_state.get('eval_last_df') is not None and st.session_state.get('eval_last_error') is None):
     st.session_state.refresh_counter += 1
     time.sleep(REFRESH_INTERVAL)
     st.rerun()

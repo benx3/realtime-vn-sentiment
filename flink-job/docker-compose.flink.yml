@@ -1,0 +1,42 @@
+# Flink Job Manager Configuration
+version: '3.8'
+
+services:
+  # Flink JobManager
+  flink-jobmanager:
+    build: ./flink-job
+    container_name: flink-jobmanager
+    ports:
+      - "8081:8081"  # Flink Web UI
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - FLINK_PROPERTIES=jobmanager.rpc.address: flink-jobmanager
+    command: jobmanager
+    volumes:
+      - flink_data:/tmp/flink-checkpoints-directory
+      - flink_data:/tmp/flink-savepoints-directory
+    depends_on:
+      - kafka
+      - mongo
+    networks:
+      - default
+
+  # Flink TaskManager  
+  flink-taskmanager:
+    build: ./flink-job
+    container_name: flink-taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - "FLINK_PROPERTIES=jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2"
+    command: taskmanager
+    volumes:
+      - flink_data:/tmp/flink-checkpoints-directory
+      - flink_data:/tmp/flink-savepoints-directory
+    networks:
+      - default
+
+volumes:
+  flink_data:

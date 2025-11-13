@@ -122,27 +122,58 @@ docker exec mongo mongosh --eval "rs.status()"
 - If build fails fetching model (no internet), remove the build-time download and place the model folder under `phobert-infer/models/phobert-sentiment-best/` manually, then rebuild.
 - If GPU not visible, check: `docker run --gpus all --rm nvidia/cuda:12.1.1-runtime-ubuntu22.04 nvidia-smi`.
 
-### Clear Test Data
+## Docker Commands for Maintenance
+
+### Rebuild and Restart Services
 ```powershell
-# Delete all data
+# Rebuild only UI service with latest code changes
+docker-compose up -d --build ui
+
+# Rebuild all services
+docker-compose up -d --build
+
+# Rebuild specific service without cache
+docker-compose build --no-cache ui
+docker-compose up -d ui
+
+# Quick restart without rebuild
+docker-compose restart ui
+```
+
+### Monitoring and Logs
+```powershell
+# View service logs in real-time
+docker logs ui -f
+docker logs realtime-vn-sentiment-spark-job-1 --tail 50
+
+# Check container status
+docker ps
+
+# Monitor Spark processing
+docker logs realtime-vn-sentiment-spark-job-1 --tail 50 | Select-String -Pattern "SPARK BATCH"
+```
+
+### Database Operations
+```powershell
+# Check review counts
+docker exec mongo mongosh --eval "db.reviews_raw.countDocuments({})" reviews_db
+
+# Clear test data
 docker exec mongo mongosh reviews_db --quiet --eval "db.reviews_raw.deleteMany({}); db.reviews_pred.deleteMany({}); print('Data cleared successfully');"
 
 # Verify deletion
 docker exec mongo mongosh reviews_db --quiet --eval "print('reviews_raw count:', db.reviews_raw.countDocuments({})); print('reviews_pred count:', db.reviews_pred.countDocuments({}));"
-
-# Restart services to process from current point
-docker-compose restart spark-job phobert-consumer
 ```
 
-### Spark Checkpoint Reset
-If Spark is not processing existing Kafka data:
+### Performance Optimization
 ```powershell
-# Clear checkpoint
-docker exec realtime-vn-sentiment-spark-job-1 rm -rf /tmp/chk_sentiment
+# Clean up unused Docker images
+docker image prune -a -f
 
-# Restart Spark
+# Reset Spark checkpoint (if not processing existing data)
+docker exec realtime-vn-sentiment-spark-job-1 rm -rf /tmp/chk_sentiment
 docker restart realtime-vn-sentiment-spark-job-1
 
-# Verify processing
-docker logs realtime-vn-sentiment-spark-job-1 --tail 50 | Select-String -Pattern "SPARK BATCH"
+# Restart data processing services
+docker-compose restart spark-job phobert-consumer
 ```

@@ -62,25 +62,9 @@ services:
               count: all
               capabilities: [gpu]
 
-  spark-job:
-    build: ./spark-job
-    depends_on: [kafka, mongo]
-    environment:
-      KAFKA_BOOTSTRAP: kafka:9092
-      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
-      SPARK_MASTER: local[*]
 
-  phobert-consumer:
-    build: ./phobert-consumer
-    container_name: phobert-consumer
-    environment:
-      KAFKA_BOOTSTRAP: realtime-vn-sentiment-kafka-1:9092
-      KAFKA_TOPIC: reviews
-      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
-      INFER_URL: http://phobert-infer:5000/predict
-      BATCH_SIZE: "128"
-      MAX_LATENCY_MS: "1500"
-    depends_on: [kafka, phobert-infer, mongo]
+
+
 
   ui:
     build: ./ui
@@ -103,5 +87,59 @@ services:
   #     PROXY_LIST: ""
   #   depends_on: [mongo]
 
+  # Apache Flink Services - Replace Spark Streaming
+  flink-jobmanager:
+    build: ./flink-job
+    container_name: flink-jobmanager
+    ports:
+      - "8081:8081"  # Flink Web UI
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    command: jobmanager
+    volumes:
+      - flink_data:/tmp/flink-checkpoints-directory
+      - flink_data:/tmp/flink-savepoints-directory
+    depends_on:
+      - kafka
+      - mongo
+
+  flink-taskmanager:
+    build: ./flink-job
+    container_name: flink-taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=2
+    command: taskmanager
+    volumes:
+      - flink_data:/tmp/flink-checkpoints-directory
+      - flink_data:/tmp/flink-savepoints-directory
+
+  # Submit Flink job automatically
+  flink-job-submit:
+    build: ./flink-job
+    container_name: flink-job-submit
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+      - kafka
+      - mongo
+      - phobert-infer
+    command: >
+      bash -c "
+        echo '⏳ Waiting for Flink cluster to be ready...' &&
+        sleep 45 &&
+        echo '🚀 Trying to submit proper Flink job...' &&
+        cd /opt/flink/usrlib &&
+        bash advanced_submit.sh
+      "
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - MONGO_URI=mongodb://mongo:27017/?replicaSet=rs0
+      - PHOBERT_URL=http://phobert-infer:5000/predict
+
 volumes:
   mongo_data:
+  flink_data:

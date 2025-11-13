@@ -138,6 +138,13 @@ def start_tiki_crawl(req: TikiCrawlReq):
             upsert=True
         )
         
+        # Reset stop signal on start
+        db.system_status.update_one(
+            {"_id": "tiki_crawler_ctrl"}, 
+            {"$set": {"stop": False}}, 
+            upsert=True
+        )
+        
         # Start crawling in background
         import threading
         def crawl_tiki():
@@ -145,6 +152,16 @@ def start_tiki_crawl(req: TikiCrawlReq):
             total_reviews = 0
             
             for url in req.urls:
+                # Check stop signal before each URL
+                ctrl = db.system_status.find_one({"_id": "tiki_crawler_ctrl"}) or {}
+                if ctrl.get("stop"):
+                    print("🛑 Tiki crawl stopped by user (before URL)")
+                    db.system_status.update_one(
+                        {"_id": "tiki_crawler_cfg"}, 
+                        {"$set": {"status": "stopped", "total_reviews": total_reviews}}, 
+                        upsert=True
+                    )
+                    return
                 try:
                     print(f"🚀 Starting Tiki crawl for: {url}")
                     reviews = tiki.crawl_reviews_from_url(
@@ -196,11 +213,16 @@ def start_tiki_crawl(req: TikiCrawlReq):
                             print(f"❌ Error saving review {review.get('review_id', 'unknown')}: {e}")
                             continue
                         
-                        # Check for stop signal - temporarily disabled for debugging
-                        # ctrl = db.system_status.find_one({"_id": "tiki_crawler_ctrl"}) or {}
-                        # if ctrl.get("stop"):
-                        #     print("🛑 Tiki crawl stopped by user")
-                        #     return
+                        # Check for stop signal - every review
+                        ctrl = db.system_status.find_one({"_id": "tiki_crawler_ctrl"}) or {}
+                        if ctrl.get("stop"):
+                            print("🛑 Tiki crawl stopped by user")
+                            db.system_status.update_one(
+                                {"_id": "tiki_crawler_cfg"}, 
+                                {"$set": {"status": "stopped", "total_reviews": total_reviews}}, 
+                                upsert=True
+                            )
+                            return
                     
                     producer.flush()
                     
