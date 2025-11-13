@@ -6,11 +6,24 @@ services:
     command: ["--replSet","rs0","--bind_ip_all"]
     volumes:
       - mongo_data:/data/db
+      - ./init/init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh:ro
     healthcheck:
       test: ["CMD","mongosh","--eval","db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
       retries: 20
+
+  # Service to ensure MongoDB replica set is initialized
+  mongo-init:
+    image: mongo:6
+    container_name: mongo-init
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./init/init-replica.sh:/init-replica.sh:ro
+    command: bash /init-replica.sh
+    restart: "no"
 
   zookeeper:
     # Use the official Zookeeper image since the Bitnami 3.9 manifest is missing on the registry.
@@ -44,7 +57,11 @@ services:
       MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
       KAFKA_BOOTSTRAP: kafka:9092
       INFER_URL: http://phobert-infer:5000/predict
-    depends_on: [mongo, kafka]
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_started
 
   phobert-infer:
     build: ./phobert-infer
@@ -74,7 +91,13 @@ services:
       API_BASE: http://api:8000
       MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
       INFER_URL: http://phobert-infer:5000
-    depends_on: [api, mongo, phobert-infer]
+    depends_on:
+      api:
+        condition: service_started
+      mongo-init:
+        condition: service_completed_successfully
+      phobert-infer:
+        condition: service_started
 
   # Optional: Background HTML crawler service (disabled due to MongoDB connection issues)
   # crawler-html:
@@ -100,8 +123,10 @@ services:
       - flink_data:/tmp/flink-checkpoints-directory
       - flink_data:/tmp/flink-savepoints-directory
     depends_on:
-      - kafka
-      - mongo
+      kafka:
+        condition: service_started
+      mongo-init:
+        condition: service_completed_successfully
 
   flink-taskmanager:
     build: ./flink-job
@@ -121,11 +146,16 @@ services:
     build: ./flink-job
     container_name: flink-job-submit
     depends_on:
-      - flink-jobmanager
-      - flink-taskmanager
-      - kafka
-      - mongo
-      - phobert-infer
+      flink-jobmanager:
+        condition: service_started
+      flink-taskmanager:
+        condition: service_started
+      kafka:
+        condition: service_started
+      mongo-init:
+        condition: service_completed_successfully
+      phobert-infer:
+        condition: service_started
     command: >
       bash -c "
         echo '⏳ Waiting for Flink cluster to be ready...' &&

@@ -227,35 +227,12 @@ with pred_tab:
         else:
             df_pred['content_display'] = "N/A"
         
-        # Get reviewer names by joining with reviews_raw
-        if 'product_id' in df_pred.columns:
-            product_ids = df_pred['product_id'].unique().tolist()
-            reviewer_map = {}
-            if product_ids:
-                # Get recent reviews for these products to get reviewer names
-                recent_reviews = list(db.reviews_raw.find(
-                    {"product_id": {"$in": product_ids}},
-                    {"product_id": 1, "reviewer_name": 1, "review_id": 1}
-                ).sort([("crawled_at", -1)]).limit(200))
-                
-                for rev in recent_reviews:
-                    pid = rev.get("product_id")
-                    reviewer = rev.get("reviewer_name", "Anonymous")
-                    review_id = str(rev.get("review_id", ""))
-                    if pid and reviewer:
-                        # Try to match by review_id first, then by product_id
-                        reviewer_map[review_id] = reviewer
-                        if pid not in reviewer_map:  # Only set if not already set
-                            reviewer_map[pid] = reviewer
-            
-            # Map reviewer names to predictions
-            df_pred['reviewer_name'] = df_pred.apply(
-                lambda row: reviewer_map.get(str(row.get('review_id', '')), 
-                           reviewer_map.get(row.get('product_id', ''), 'Anonymous')), 
-                axis=1
-            )
-        else:
+        # Ensure reviewer_name exists, fallback to Anonymous if missing
+        if 'reviewer_name' not in df_pred.columns:
             df_pred['reviewer_name'] = 'Anonymous'
+        else:
+            # Fill missing values
+            df_pred['reviewer_name'] = df_pred['reviewer_name'].fillna('Anonymous')
         
         # Convert datetime columns to string immediately to avoid Arrow serialization errors
         for col in df_pred.columns:

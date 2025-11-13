@@ -120,6 +120,10 @@ class SentimentProcessor:
             "platform": review_data.get("platform", "unknown"),
             "category_name": review_data.get("category_name", "Unknown"),
             "product_name": review_data.get("product_name", ""),
+            "product_id": review_data.get("product_id", ""),
+            "reviewer_name": review_data.get("reviewer_name", "Anonymous"),
+            "content": review_data.get("content", ""),
+            "title": review_data.get("title", ""),
             "rating": review_data.get("rating", 0),
             "content_length": len(review_data.get("content", "")),
             "flink_processed": True
@@ -154,7 +158,7 @@ class KafkaStreamProcessor:
             topic,
             bootstrap_servers=[bootstrap_servers],
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-            auto_offset_reset='latest',
+            auto_offset_reset='earliest',  # Process from beginning
             group_id=f'flink-{model_type}-consumer'
         )
         
@@ -164,6 +168,7 @@ class KafkaStreamProcessor:
         """Start processing messages"""
         logger.info(f"▶️ Starting {self.model_type} stream processor...")
         processed_count = 0
+        skipped_count = 0
         
         try:
             for message in self.consumer:
@@ -171,6 +176,14 @@ class KafkaStreamProcessor:
                     break
                     
                 review_data = message.value
+                
+                # Filter: Only process reviews with content length > 3
+                content = review_data.get('content', '')
+                if len(content) <= 3:
+                    skipped_count += 1
+                    if skipped_count % 50 == 0:
+                        logger.info(f"⏭️ {self.model_type}: Skipped {skipped_count} reviews (content too short)")
+                    continue
                 
                 # Make prediction
                 if self.model_type == 'baseline':
@@ -228,15 +241,15 @@ def wait_for_services():
     for i in range(30):
         try:
             mongo_uri = os.getenv('MONGO_URI', 'mongodb://mongo:27017/?replicaSet=rs0')
-            client = MongoClient(mongo_uri, serverSelectionTimeoutMS=2000)
+            client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)
             client.admin.command('ping')
             client.close()
             mongo_ready = True
             logger.info("✅ MongoDB is ready")
             break
         except Exception as e:
-            logger.info(f"⏳ Waiting for MongoDB... ({i+1}/30)")
-            time.sleep(2)
+            logger.info(f"⏳ Waiting for MongoDB... ({i+1}/30) - {str(e)[:100]}")
+            time.sleep(4)
     
     if not mongo_ready:
         logger.error("❌ MongoDB not ready after 60 seconds")
