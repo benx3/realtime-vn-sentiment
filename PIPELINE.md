@@ -37,7 +37,7 @@
               │         MongoDB (reviews_db)               │
               │  - reviews_raw (crawler output)            │
               │  - reviews_pred (model predictions)        │
-              │    + reviewer_name, content, title         │
+              │                                            │
               └────────────────────────────────────────────┘
 ```
 
