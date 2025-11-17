@@ -4,7 +4,6 @@ from typing import Optional, List
 from kafka import KafkaProducer
 import json, os, requests, hashlib
 from pymongo import MongoClient
-from crawlers.shopee import ShopeeClient
 from crawlers.tiki import TikiClient
 
 app = FastAPI()
