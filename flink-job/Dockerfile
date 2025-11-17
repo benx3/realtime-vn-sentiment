@@ -21,14 +21,12 @@ COPY requirements.txt /tmp/
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
     # Use default Flink configuration
-    # COPY flink-conf.yaml /opt/flink/conf/flink-conf.yaml# Copy Flink jobs and utilities
+    # COPY flink-conf.yaml /opt/flink/conf/flink-conf.yaml
+
+# Copy Flink jobs and utilities (only active files)
 COPY simple_sentiment_job.py /opt/flink/usrlib/
-COPY flink_sentiment_job.py /opt/flink/usrlib/
-COPY flink_job_submitter.py /opt/flink/usrlib/
 COPY advanced_submit.sh /opt/flink/usrlib/
-COPY submit_job.py /opt/flink/usrlib/
-COPY submit_job.sh /opt/flink/usrlib/
-COPY ml_utils.py /opt/flink/usrlib/
+COPY dashboard_job.py /opt/flink/usrlib/
 
 # Set working directory
 WORKDIR /opt/flink
