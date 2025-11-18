@@ -8,13 +8,15 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     curl \
     wget \
+    && ln -s /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories
 RUN mkdir -p /opt/flink/usrlib /opt/flink/lib-ext
 
-# Skip Kafka connector download - we'll use Python Kafka client
-RUN echo "Using Python Kafka client instead of Flink connector"
+# Download Kafka connector JAR for PyFlink (required for KafkaSource)
+RUN wget -P /opt/flink/lib \
+    https://repo1.maven.org/maven2/org/apache/flink/flink-sql-connector-kafka/3.0.2-1.18/flink-sql-connector-kafka-3.0.2-1.18.jar
 
 # Copy Python requirements and install
 COPY requirements.txt /tmp/
@@ -23,10 +25,18 @@ RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
     # Use default Flink configuration
     # COPY flink-conf.yaml /opt/flink/conf/flink-conf.yaml
 
-# Copy Flink jobs and utilities (only active files)
+# Copy Flink jobs and utilities
 COPY simple_sentiment_job.py /opt/flink/usrlib/
 COPY advanced_submit.sh /opt/flink/usrlib/
 COPY dashboard_job.py /opt/flink/usrlib/
+
+# Copy PyFlink V2 jobs (for cluster submission)
+COPY pyflink_baseline_job.py /opt/flink/usrlib/
+COPY pyflink_phobert_job.py /opt/flink/usrlib/
+COPY pyflink_submit.sh /opt/flink/usrlib/
+
+# Make scripts executable
+RUN chmod +x /opt/flink/usrlib/*.sh
 
 # Set working directory
 WORKDIR /opt/flink

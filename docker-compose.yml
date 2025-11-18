@@ -156,13 +156,13 @@ services:
         condition: service_completed_successfully
       phobert-infer:
         condition: service_started
+    # VERSION 2: Use PyFlink jobs submitted to cluster
     command: >
       bash -c "
-        echo '⏳ Waiting for Flink cluster to be ready...' &&
-        sleep 45 &&
-        echo '🚀 Trying to submit proper Flink job...' &&
+        echo '🚀 Starting PyFlink Job Submission (Version 2.0)...' &&
+        echo '📊 Jobs will be visible on Flink Dashboard: http://localhost:8081' &&
         cd /opt/flink/usrlib &&
-        bash advanced_submit.sh
+        bash pyflink_submit.sh
       "
     environment:
       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
